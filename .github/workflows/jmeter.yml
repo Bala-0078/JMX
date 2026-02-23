@@ -1,0 +1,407 @@
+# ============================================================
+# GitHub Actions Workflow — JMeter Performance Test
+# Auto-generated from: Petstore API Test Plan
+# ============================================================
+# This workflow executes a JMeter performance test against the
+# Petstore API with full parameterization support.
+#
+# Detected Parameters:
+#   - PROTOCOL, SERVER, BASE_PATH (connection settings)
+#   - THREADS, RAMPUP, LOOPS (load configuration)
+#   - petId, orderId, username (path parameters)
+#   - pet_*, order_*, user_* (request body fields)
+#
+# Required GitHub Secrets: None (public API)
+# Optional Secrets: API_KEY (if authentication is added later)
+# ============================================================
+
+name: JMeter Performance Test - Petstore API
+
+on:
+  workflow_dispatch:
+    inputs:
+      protocol:
+        description: 'Protocol (http/https)'
+        required: false
+        default: 'https'
+        type: choice
+        options:
+          - https
+          - http
+      server:
+        description: 'Target server hostname'
+        required: false
+        default: 'petstore.swagger.io'
+        type: string
+      base_path:
+        description: 'API base path'
+        required: false
+        default: '/v2'
+        type: string
+      threads:
+        description: 'Number of concurrent threads (virtual users)'
+        required: false
+        default: '10'
+        type: string
+      rampup:
+        description: 'Ramp-up period in seconds'
+        required: false
+        default: '5'
+        type: string
+      loops:
+        description: 'Number of iterations per thread'
+        required: false
+        default: '5'
+        type: string
+      petId:
+        description: 'Pet ID for path parameter'
+        required: false
+        default: '12345'
+        type: string
+      orderId:
+        description: 'Order ID for path parameter'
+        required: false
+        default: '67890'
+        type: string
+      username:
+        description: 'Username for path parameter'
+        required: false
+        default: 'testuser'
+        type: string
+      error_threshold:
+        description: 'Maximum allowed error rate percentage (0-100)'
+        required: false
+        default: '5'
+        type: string
+      jmeter_version:
+        description: 'Apache JMeter version'
+        required: false
+        default: '5.6.3'
+        type: string
+
+  schedule:
+    # Run performance tests daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  push:
+    branches:
+      - main
+    paths:
+      - '**.jmx'
+      - '.github/workflows/jmeter-test.yml'
+
+# Prevent concurrent test runs against the same environment
+concurrency:
+  group: jmeter-petstore-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  JMETER_VERSION: ${{ inputs.jmeter_version || '5.6.3' }}
+  JMETER_HOME: /opt/jmeter
+  JMX_FILE: petstore_parameterized.jmx
+
+jobs:
+  performance-test:
+    name: Execute JMeter Performance Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      # ============================================================
+      # STEP 1: Checkout Repository
+      # ============================================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # ============================================================
+      # STEP 2: Setup Java Environment
+      # ============================================================
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
+
+      # ============================================================
+      # STEP 3: Install Apache JMeter
+      # ============================================================
+      - name: Install Apache JMeter
+        run: |
+          echo "Installing Apache JMeter ${JMETER_VERSION}..."
+
+          # Download JMeter
+          wget -q https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-${JMETER_VERSION}.tgz
+
+          # Verify download succeeded
+          if [ ! -f "apache-jmeter-${JMETER_VERSION}.tgz" ]; then
+            echo "ERROR: Failed to download JMeter"
+            exit 1
+          fi
+
+          # Extract to /opt
+          sudo mkdir -p ${JMETER_HOME}
+          sudo tar -xzf apache-jmeter-${JMETER_VERSION}.tgz -C /opt
+          sudo mv /opt/apache-jmeter-${JMETER_VERSION}/* ${JMETER_HOME}/
+
+          # Verify installation
+          ${JMETER_HOME}/bin/jmeter --version
+
+          # Add JMeter to PATH
+          echo "${JMETER_HOME}/bin" >> $GITHUB_PATH
+
+          echo "JMeter installation complete"
+
+      # ============================================================
+      # STEP 4: Install JMeter Plugins (if needed)
+      # ============================================================
+      - name: Install JMeter Plugins Manager
+        run: |
+          echo "Installing JMeter Plugins Manager..."
+
+          # Download Plugins Manager
+          wget -q -O ${JMETER_HOME}/lib/ext/jmeter-plugins-manager.jar \
+            https://jmeter-plugins.org/get/
+
+          # Download Command Line Runner for plugin installation
+          wget -q -O ${JMETER_HOME}/lib/cmdrunner-2.3.jar \
+            https://search.maven.org/remotecontent?filepath=kg/apc/cmdrunner/2.3/cmdrunner-2.3.jar
+
+          # Generate helper scripts
+          java -cp ${JMETER_HOME}/lib/cmdrunner-2.3.jar kg.apc.cmdtools.PluginManagerCMD
+
+          echo "Plugins Manager installation complete"
+
+      # ============================================================
+      # STEP 5: Validate JMX File
+      # ============================================================
+      - name: Validate JMX file exists
+        run: |
+          if [ ! -f "${JMX_FILE}" ]; then
+            echo "ERROR: JMX file '${JMX_FILE}' not found in repository root"
+            echo "Please ensure the JMX file is committed to the repository"
+            exit 1
+          fi
+          echo "JMX file validated: ${JMX_FILE}"
+
+      # ============================================================
+      # STEP 6: Create Results Directories
+      # ============================================================
+      - name: Create results directories
+        run: |
+          mkdir -p results/report
+          mkdir -p results/logs
+          echo "Results directories created"
+
+      # ============================================================
+      # STEP 7: Run JMeter Performance Test
+      # ============================================================
+      - name: Execute JMeter test
+        id: jmeter_run
+        run: |
+          echo "Starting JMeter performance test..."
+          echo "Test Plan: Petstore API Test Plan"
+          echo "Configuration:"
+          echo "  - Target: ${{ inputs.protocol || 'https' }}://${{ inputs.server || 'petstore.swagger.io' }}${{ inputs.base_path || '/v2' }}"
+          echo "  - Threads: ${{ inputs.threads || '10' }}"
+          echo "  - Ramp-up: ${{ inputs.rampup || '5' }}s"
+          echo "  - Loops: ${{ inputs.loops || '5' }}"
+          echo ""
+
+          # Build JMeter command with all parameters
+          ${JMETER_HOME}/bin/jmeter -n \
+            -t ${JMX_FILE} \
+            -l results/results.jtl \
+            -j results/logs/jmeter.log \
+            -e -o results/report \
+            -JPROTOCOL="${{ inputs.protocol || 'https' }}" \
+            -JSERVER="${{ inputs.server || 'petstore.swagger.io' }}" \
+            -JBASE_PATH="${{ inputs.base_path || '/v2' }}" \
+            -JTHREADS="${{ inputs.threads || '10' }}" \
+            -JRAMPUP="${{ inputs.rampup || '5' }}" \
+            -JLOOPS="${{ inputs.loops || '5' }}" \
+            -JpetId="${{ inputs.petId || '12345' }}" \
+            -JorderId="${{ inputs.orderId || '67890' }}" \
+            -Jusername="${{ inputs.username || 'testuser' }}" \
+            -Jpet_id="0" \
+            -Jpet_name="doggie" \
+            -Jpet_status="available" \
+            -Jorder_id="0" \
+            -Jorder_petId="0" \
+            -Jorder_quantity="1" \
+            -Jorder_status="placed" \
+            -Juser_id="0" \
+            -Juser_username="user1" \
+            -Juser_email="user1@example.com" \
+            || echo "JMETER_FAILED=true" >> $GITHUB_OUTPUT
+
+          echo ""
+          echo "JMeter test execution completed"
+
+      # ============================================================
+      # STEP 8: Parse Test Results
+      # ============================================================
+      - name: Parse test results
+        if: always()
+        id: parse_results
+        run: |
+          echo "Parsing JMeter results..."
+
+          if [ ! -f "results/results.jtl" ]; then
+            echo "ERROR: Results file not found"
+            exit 1
+          fi
+
+          # Count total samples and errors
+          TOTAL_SAMPLES=$(grep -c "<httpSample" results/results.jtl || echo "0")
+          ERROR_SAMPLES=$(grep -c 'success="false"' results/results.jtl || echo "0")
+
+          # Calculate error rate
+          if [ "$TOTAL_SAMPLES" -gt 0 ]; then
+            ERROR_RATE=$(awk "BEGIN {printf \"%.2f\", ($ERROR_SAMPLES / $TOTAL_SAMPLES) * 100}")
+          else
+            ERROR_RATE="0.00"
+          fi
+
+          # Extract response time statistics (90th percentile)
+          # This is a simplified extraction - full analysis is in HTML report
+
+          echo "Test Results Summary:"
+          echo "  Total Requests: $TOTAL_SAMPLES"
+          echo "  Failed Requests: $ERROR_SAMPLES"
+          echo "  Error Rate: ${ERROR_RATE}%"
+          echo ""
+
+          # Export for next steps
+          echo "TOTAL_SAMPLES=$TOTAL_SAMPLES" >> $GITHUB_OUTPUT
+          echo "ERROR_SAMPLES=$ERROR_SAMPLES" >> $GITHUB_OUTPUT
+          echo "ERROR_RATE=$ERROR_RATE" >> $GITHUB_OUTPUT
+
+      # ============================================================
+      # STEP 9: Check Error Threshold
+      # ============================================================
+      - name: Validate error threshold
+        if: always() && steps.parse_results.outcome == 'success'
+        run: |
+          ERROR_RATE="${{ steps.parse_results.outputs.ERROR_RATE }}"
+          THRESHOLD="${{ inputs.error_threshold || '5' }}"
+
+          echo "Error Rate: ${ERROR_RATE}%"
+          echo "Threshold: ${THRESHOLD}%"
+
+          # Compare error rate to threshold
+          if (( $(echo "$ERROR_RATE > $THRESHOLD" | bc -l) )); then
+            echo "❌ FAILED: Error rate ${ERROR_RATE}% exceeds threshold ${THRESHOLD}%"
+            exit 1
+          else
+            echo "✅ PASSED: Error rate ${ERROR_RATE}% is within threshold ${THRESHOLD}%"
+          fi
+
+      # ============================================================
+      # STEP 10: Upload JTL Results
+      # ============================================================
+      - name: Upload JTL results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jmeter-results-jtl-${{ github.run_number }}
+          path: results/results.jtl
+          retention-days: 30
+          if-no-files-found: warn
+
+      # ============================================================
+      # STEP 11: Upload HTML Report
+      # ============================================================
+      - name: Upload HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jmeter-html-report-${{ github.run_number }}
+          path: results/report/
+          retention-days: 30
+          if-no-files-found: warn
+
+      # ============================================================
+      # STEP 12: Upload JMeter Logs
+      # ============================================================
+      - name: Upload JMeter logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jmeter-logs-${{ github.run_number }}
+          path: results/logs/
+          retention-days: 7
+          if-no-files-found: warn
+
+      # ============================================================
+      # STEP 13: Generate Job Summary
+      # ============================================================
+      - name: Generate job summary
+        if: always()
+        run: |
+          echo "# 📊 JMeter Performance Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Test Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- **Test Plan:** Petstore API Test Plan" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target:** ${{ inputs.protocol || 'https' }}://${{ inputs.server || 'petstore.swagger.io' }}${{ inputs.base_path || '/v2' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Threads:** ${{ inputs.threads || '10' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Ramp-up:** ${{ inputs.rampup || '5' }}s" >> $GITHUB_STEP_SUMMARY
+          echo "- **Loops:** ${{ inputs.loops || '5' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Results Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total Requests:** ${{ steps.parse_results.outputs.TOTAL_SAMPLES }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Failed Requests:** ${{ steps.parse_results.outputs.ERROR_SAMPLES }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Error Rate:** ${{ steps.parse_results.outputs.ERROR_RATE }}%" >> $GITHUB_STEP_SUMMARY
+          echo "- **Error Threshold:** ${{ inputs.error_threshold || '5' }}%" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if (( $(echo "${{ steps.parse_results.outputs.ERROR_RATE }} > ${{ inputs.error_threshold || '5' }}" | bc -l) )); then
+            echo "## ❌ Test Status: FAILED" >> $GITHUB_STEP_SUMMARY
+            echo "Error rate exceeded threshold" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ✅ Test Status: PASSED" >> $GITHUB_STEP_SUMMARY
+            echo "All performance criteria met" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📁 Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- JTL Results: \`jmeter-results-jtl-${{ github.run_number }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- HTML Report: \`jmeter-html-report-${{ github.run_number }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- JMeter Logs: \`jmeter-logs-${{ github.run_number }}\`" >> $GITHUB_STEP_SUMMARY
+
+      # ============================================================
+      # STEP 14: Comment on PR (if triggered by PR)
+      # ============================================================
+      - name: Comment PR with results
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |-
+            const errorRate = '${{ steps.parse_results.outputs.ERROR_RATE }}';
+            const threshold = '${{ inputs.error_threshold || '5' }}';
+            const status = parseFloat(errorRate) > parseFloat(threshold) ? '❌ FAILED' : '✅ PASSED';
+
+            const comment = `## 📊 JMeter Performance Test Results
+
+            **Status:** ${status}
+
+            ### Configuration
+            - **Target:** ${{ inputs.protocol || 'https' }}://${{ inputs.server || 'petstore.swagger.io' }}${{ inputs.base_path || '/v2' }}
+            - **Load:** ${{ inputs.threads || '10' }} threads, ${{ inputs.rampup || '5' }}s ramp-up, ${{ inputs.loops || '5' }} loops
+
+            ### Results
+            - **Total Requests:** ${{ steps.parse_results.outputs.TOTAL_SAMPLES }}
+            - **Failed Requests:** ${{ steps.parse_results.outputs.ERROR_SAMPLES }}
+            - **Error Rate:** ${errorRate}% (threshold: ${threshold}%)
+
+            ### Artifacts
+            Download the full HTML report from the workflow artifacts.
+            `;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
